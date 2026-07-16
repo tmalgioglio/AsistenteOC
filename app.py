@@ -100,6 +100,10 @@ def send_suggestion_to_google_form(sucursal, tramite):
         except Exception as e:
             return False, f"Error al guardar localmente: {e}"
             
+    # Auto-corrección del URL: si es viewform, lo pasamos a formResponse
+    if "/viewform" in form_url:
+        form_url = form_url.split("/viewform")[0] + "/formResponse"
+        
     try:
         # Google Forms espera enviar datos mediante POST al formResponse
         entry_sucursal = get_secret("GOOGLE_FORM_ENTRY_SUCURSAL", "entry.1000001")
@@ -111,12 +115,23 @@ def send_suggestion_to_google_form(sucursal, tramite):
         }
         
         response = requests.post(form_url, data=data, timeout=5)
-        # Un envío exitoso de Google Form responde con status 200
+        
+        # Si devuelve 401/403 es porque el formulario requiere loguearse con cuenta de Google Workspace de La Virginia
+        if response.status_code in [401, 403]:
+            # Guardamos copia de respaldo local
+            file_exists = os.path.exists("sugerencias.csv")
+            with open("sugerencias.csv", "a", encoding="utf-8") as f:
+                if not file_exists:
+                    f.write("Sucursal,Tramite\n")
+                f.write(f'"{sucursal or "Todas"}","{tramite}"\n')
+            return False, "GOOGLE_WORKSPACE_RESTRICTION"
+            
         if response.status_code == 200:
             return True, "google"
         return False, f"HTTP {response.status_code}"
     except Exception as e:
         return False, str(e)
+
 
 # Función para enviar notificaciones a Google Chat vía Webhook
 def send_to_google_chat(sucursal, query):
