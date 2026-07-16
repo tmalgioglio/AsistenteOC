@@ -277,11 +277,8 @@ if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] 
             # Formatear sucursal actual
             branch_status = st.session_state.user_branch if st.session_state.user_branch else "Desconocida"
 
-            # Formatear consulta para mailto
+            # Obtener consulta original
             last_query = st.session_state.messages[-1]["content"]
-            encoded_query = urllib.parse.quote(last_query)
-            encoded_branch = urllib.parse.quote(branch_status)
-            mailto_url = f"mailto:admcomercial@lavirginia.com.ar?subject=Consulta%20no%20resuelta%20-%20Asistente%20Virtual&body=Hola%20equipo,%20el%20asistente%20no%20pudo%20encontrar%20el%20link%20para%20la%20consulta%20%22{encoded_query}%22%20de%20la%20sucursal%20{encoded_branch}."
 
             # Generar System Instruction
             system_prompt = f"""
@@ -298,9 +295,8 @@ if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] 
                - Cuando entregues un enlace, hazlo en su propia línea usando Markdown estándar: [Nombre del Trámite o Herramienta](URL). La aplicación se encargará de darle diseño de botón.
                - El texto que acompaña al link debe ser muy corto (ej: "Acá tenés el link para la carga de acuerdos en Rosario:").
                - SI EL TRÁMITE O LINK NO EXISTE EN TU BASE DE DATOS DE LINKS:
-                 1. Dile de forma concisa y amable que no posees ese enlace en el catálogo actual.
-                 2. Agrégale que derivarás su consulta y proporciónale el siguiente botón exacto en una línea nueva para enviar un correo pre-armado a Administración Comercial:
-                    [Derivar consulta a Administración Comercial]({mailto_url})
+                 1. Escribe de manera obligatoria la palabra clave `[DERIVAR]` en alguna parte de tu respuesta.
+                 2. Infórmale al usuario de forma muy breve y atenta que ese trámite o link no está en la base de datos actual, pero que su consulta ya fue derivada automáticamente al equipo de Administración Comercial para que lo agreguen en la planilla. (NO muestres direcciones de correo ni solicites al usuario que envíe un mail).
             
             BASE DE DATOS DE LINKS AUTORIZADA:
             {db_context}
@@ -326,39 +322,20 @@ if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] 
                 response = model.generate_content(contents)
                 assistant_response = response.text
 
-                # Si la respuesta contiene un link de derivación (mailto:),
+                # Si la respuesta contiene el token de derivación [DERIVAR],
                 # significa que el asistente no pudo responder la consulta.
                 # Guardamos la consulta como sugerencia y notificamos a Google Chat en segundo plano.
-                if "mailto:" in assistant_response:
+                if "[DERIVAR]" in assistant_response:
                     send_suggestion_to_google_form(branch_status, last_query)
                     send_to_google_chat(branch_status, last_query)
+                    # Limpiar la palabra clave para que no sea visible al usuario en pantalla
+                    assistant_response = assistant_response.replace("[DERIVAR]", "").strip()
 
                 # Guardar respuesta del asistente
                 st.session_state.messages.append({"role": "assistant", "content": assistant_response})
                 st.rerun()
 
-
             except Exception as e:
                 st.error(f"Ocurrió un error al consultar con el asistente: {e}")
 
-# 12. SECCIÓN DE SUGERENCIAS AL PIE (Expander elegante)
-st.markdown("<br>", unsafe_allow_html=True)
-with st.expander("📝 ¿Falta alguna herramienta o link? Envianos una sugerencia"):
-    with st.form("suggestion_form", clear_on_submit=True):
-        sug_tramite = st.text_input("Trámite o herramienta que falta:", placeholder="Ej: Alta de Cliente HORECA")
-        sug_sucursal = st.selectbox("Sucursal relacionada:", ["Todas"] + list(unique_branches))
-        submitted_sug = st.form_submit_button("Enviar Sugerencia")
-        
-        if submitted_sug:
-            if not sug_tramite.strip():
-                st.error("Por favor, escribe qué herramienta o trámite falta.")
-            else:
-                success, method = send_suggestion_to_google_form(sug_sucursal, sug_tramite)
-                if success:
-                    if method == "local":
-                        st.success("¡Sugerencia guardada localmente! (Se guardó en 'sugerencias.csv').")
-                    else:
-                        st.success("¡Sugerencia enviada con éxito al equipo de administración comercial!")
-                else:
-                    st.error(f"No se pudo enviar la sugerencia. Detalle: {method}")
 
