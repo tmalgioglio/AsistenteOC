@@ -3,6 +3,9 @@ import pandas as pd
 import google.generativeai as genai
 import os
 import unicodedata
+import requests
+import urllib.parse
+
 
 # 1. CONFIGURACIÓN DE LA PÁGINA (Estética Vercel/Apple)
 st.set_page_config(
@@ -79,6 +82,59 @@ def get_secret(key, default=None):
         return st.secrets.get(key, default)
     except Exception:
         return os.environ.get(key, default)
+
+# Función para enviar sugerencias a Google Forms (o CSV local de respaldo)
+def send_suggestion_to_google_form(sucursal, tramite):
+    form_url = get_secret("GOOGLE_FORM_URL", None)
+    
+    if not form_url:
+        try:
+            # Si no hay Google Form configurado, escribimos en un CSV local
+            file_exists = os.path.exists("sugerencias.csv")
+            with open("sugerencias.csv", "a", encoding="utf-8") as f:
+                if not file_exists:
+                    f.write("Sucursal,Tramite\n")
+                f.write(f'"{sucursal or "Todas"}","{tramite}"\n')
+            return True, "local"
+        except Exception as e:
+            return False, f"Error al guardar localmente: {e}"
+            
+    try:
+        # Google Forms espera enviar datos mediante POST al formResponse
+        entry_sucursal = get_secret("GOOGLE_FORM_ENTRY_SUCURSAL", "entry.1000001")
+        entry_tramite = get_secret("GOOGLE_FORM_ENTRY_TRAMITE", "entry.1000002")
+        
+        data = {
+            entry_sucursal: sucursal or "Todas",
+            entry_tramite: tramite
+        }
+        
+        response = requests.post(form_url, data=data, timeout=5)
+        # Un envío exitoso de Google Form responde con status 200
+        if response.status_code == 200:
+            return True, "google"
+        return False, f"HTTP {response.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+# Función para enviar notificaciones a Google Chat vía Webhook
+def send_to_google_chat(sucursal, query):
+    webhook_url = get_secret("GOOGLE_CHAT_WEBHOOK_URL", None)
+    if not webhook_url:
+        return False
+    try:
+        payload = {
+            "text": f"🚨 *Asistente Operativo - Consulta No Resuelta*\n"
+                    f"• *Sucursal:* {sucursal or 'Desconocida'}\n"
+                    f"• *Consulta del usuario:* \"{query}\"\n"
+                    f"• *Acción:* La consulta no se pudo resolver y se derivó. Por favor, agregá el link correspondiente en la planilla de Google Sheets."
+        }
+        response = requests.post(webhook_url, json=payload, timeout=5)
+        return response.status_code == 200
+    except Exception:
+        return False
+
+
 
 # Determinar URL del Google Sheet
 # Se lee de st.secrets o de variables de entorno
@@ -221,6 +277,12 @@ if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] 
             # Formatear sucursal actual
             branch_status = st.session_state.user_branch if st.session_state.user_branch else "Desconocida"
 
+            # Formatear consulta para mailto
+            last_query = st.session_state.messages[-1]["content"]
+            encoded_query = urllib.parse.quote(last_query)
+            encoded_branch = urllib.parse.quote(branch_status)
+            mailto_url = f"mailto:admcomercial@lavirginia.com.ar?subject=Consulta%20no%20resuelta%20-%20Asistente%20Virtual&body=Hola%20equipo,%20el%20asistente%20no%20pudo%20encontrar%20el%20link%20para%20la%20consulta%20%22{encoded_query}%22%20de%20la%20sucursal%20{encoded_branch}."
+
             # Generar System Instruction
             system_prompt = f"""
             Eres el Asistente Virtual de Operaciones Comerciales de la empresa La Virginia. Tu objetivo es ayudar al personal de las sucursales a encontrar rápidamente los enlaces (URLs) que necesitan.
@@ -232,9 +294,13 @@ if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] 
                - Si el trámite solicitado depende de la sucursal (ej: Carga de Acuerdos, Solicitud de ejecución) y la sucursal actual es "Desconocida", DEBES pedir amablemente al usuario que te diga de qué sucursal es (ej. "¿De qué sucursal sos?"). No muestres ningún link de sucursal hasta saberla.
                - Si el trámite es general (Sucursal: "Todas"), entrega el link directamente sin importar la sucursal.
                - Si la sucursal ya es conocida (distinta de "Desconocida"), entrega DIRECTAMENTE el enlace que le corresponde a esa sucursal específica.
-            4. CÓMO ENTREGAR ENLACES:
+            4. CÓMO ENTREGAR ENLACES Y DERIVACIONES:
                - Cuando entregues un enlace, hazlo en su propia línea usando Markdown estándar: [Nombre del Trámite o Herramienta](URL). La aplicación se encargará de darle diseño de botón.
                - El texto que acompaña al link debe ser muy corto (ej: "Acá tenés el link para la carga de acuerdos en Rosario:").
+               - SI EL TRÁMITE O LINK NO EXISTE EN TU BASE DE DATOS DE LINKS:
+                 1. Dile de forma concisa y amable que no posees ese enlace en el catálogo actual.
+                 2. Agrégale que derivarás su consulta y proporciónale el siguiente botón exacto en una línea nueva para enviar un correo pre-armado a Administración Comercial:
+                    [Derivar consulta a Administración Comercial]({mailto_url})
             
             BASE DE DATOS DE LINKS AUTORIZADA:
             {db_context}
@@ -260,9 +326,39 @@ if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] 
                 response = model.generate_content(contents)
                 assistant_response = response.text
 
+                # Si la respuesta contiene un link de derivación (mailto:),
+                # significa que el asistente no pudo responder la consulta.
+                # Guardamos la consulta como sugerencia y notificamos a Google Chat en segundo plano.
+                if "mailto:" in assistant_response:
+                    send_suggestion_to_google_form(branch_status, last_query)
+                    send_to_google_chat(branch_status, last_query)
+
                 # Guardar respuesta del asistente
                 st.session_state.messages.append({"role": "assistant", "content": assistant_response})
                 st.rerun()
 
+
             except Exception as e:
                 st.error(f"Ocurrió un error al consultar con el asistente: {e}")
+
+# 12. SECCIÓN DE SUGERENCIAS AL PIE (Expander elegante)
+st.markdown("<br>", unsafe_allow_html=True)
+with st.expander("📝 ¿Falta alguna herramienta o link? Envianos una sugerencia"):
+    with st.form("suggestion_form", clear_on_submit=True):
+        sug_tramite = st.text_input("Trámite o herramienta que falta:", placeholder="Ej: Alta de Cliente HORECA")
+        sug_sucursal = st.selectbox("Sucursal relacionada:", ["Todas"] + list(unique_branches))
+        submitted_sug = st.form_submit_button("Enviar Sugerencia")
+        
+        if submitted_sug:
+            if not sug_tramite.strip():
+                st.error("Por favor, escribe qué herramienta o trámite falta.")
+            else:
+                success, method = send_suggestion_to_google_form(sug_sucursal, sug_tramite)
+                if success:
+                    if method == "local":
+                        st.success("¡Sugerencia guardada localmente! (Se guardó en 'sugerencias.csv').")
+                    else:
+                        st.success("¡Sugerencia enviada con éxito al equipo de administración comercial!")
+                else:
+                    st.error(f"No se pudo enviar la sugerencia. Detalle: {method}")
+

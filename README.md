@@ -65,3 +65,70 @@ Para insertar el asistente en una sección dedicada a pantalla completa en tu Go
 5.  Pega la URL modificada en la pestaña **Mediante URL** (By URL).
 6.  Ajusta el tamaño del contenedor en Google Sites arrastrando los bordes para que ocupe todo el ancho y alto de la página de forma cómoda.
 7.  Haz clic en **Publicar** en Google Sites. ¡Tu asistente ya está listo para todas las sucursales!
+
+---
+
+## ⚙️ 4. Preguntas Frecuentes y Lógica de Desarrollo
+
+### ¿El CSV se mantiene actualizado automáticamente?
+**Sí.** Al usar "Publicar en la web" de Google Sheets, Google sirve el archivo CSV actualizado en tiempo real. 
+El chatbot de Streamlit tiene una caché inteligente configurada de **15 minutos** (`ttl=900` en el código). Esto significa que cualquier cambio que un administrador haga en la planilla de Google Sheets se reflejará de forma de actualización automática en el chatbot en un plazo máximo de 15 minutos, sin necesidad de reiniciar la app ni volver a desplegar el código. Esto previene sobrecargar el servidor con peticiones repetitivas.
+
+### Si muevo el archivo de Google Sheets de carpeta, ¿se rompe el acceso?
+**No.** Google Sheets identifica los archivos mediante una clave única contenida en el link (el ID largo entre `/d/` y `/pub`). Mover el archivo a otra carpeta de Google Drive o cambiarle el nombre no altera este ID, por lo que el acceso se mantendrá perfectamente y la app seguirá funcionando. Sólo se rompería si eliminas el archivo por completo o creas una copia nueva (ya que se generaría un nuevo ID).
+
+---
+
+## 📝 5. Configuración del Buzón de Sugerencias (Google Forms)
+
+El chatbot cuenta con un formulario al pie de página para que los usuarios sugieran links que faltan. Si no configuras nada, las sugerencias se guardan localmente en tu servidor en un archivo llamado `sugerencias.csv`. 
+
+Para enviarlas de forma automática a una planilla de Google Sheets:
+1. Crea un **Google Form** con dos preguntas:
+   * "Sucursal" (Texto corto o Selección)
+   * "Trámite faltante" (Texto corto o Párrafo)
+2. Abre el formulario en modo de edición, haz clic en los tres puntos de la esquina superior derecha y selecciona **"Obtener enlace rellenado previamente"** (Get pre-filled link).
+3. Escribe cualquier respuesta de prueba y haz clic en **Obtener enlace**. Copia el enlace generado.
+4. Ese enlace tendrá este formato:
+   `https://docs.google.com/forms/d/e/1FAIpQLSc.../viewform?entry.1000001=Rosario&entry.1000002=Acuerdos`
+   * Anota los códigos de entrada: en este caso `entry.1000001` y `entry.1000002` (estos identifican las preguntas).
+5. Cambia el final de la URL del formulario de `/viewform` a `/formResponse`. Esa será tu URL de envío.
+6. Agrega estas tres variables de entorno en los **Secrets de Streamlit Cloud**:
+   ```toml
+   GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/TU_FORM_ID/formResponse"
+   GOOGLE_FORM_ENTRY_SUCURSAL = "entry.1000001"
+   GOOGLE_FORM_ENTRY_TRAMITE = "entry.1000002"
+   ```
+Una vez configurado, cualquier sugerencia enviada desde el pie de página del chatbot se guardará directamente en tu Google Sheet vinculado al formulario.
+
+---
+
+## ✉️ 6. Derivación de Consultas y Registro Automático en Sheets
+
+Si un usuario solicita un trámite o consulta algo que **no existe** en la base de datos de enlaces:
+1. El asistente de Gemini identificará la ausencia del link.
+2. Le responderá amablemente indicándole que no posee el enlace.
+3. Generará automáticamente un botón interactivo llamado **"Derivar consulta a Administración Comercial"** (`mailto:`).
+4. **REGISTRO EN SEGUNDO PLANO:** En ese mismo instante, la aplicación registrará **de forma automática** el trámite y la sucursal del usuario como una nueva sugerencia en el archivo `sugerencias.csv` (o en tu Google Sheet configurado en el paso 5). Los administradores verán esta entrada de inmediato sin que el usuario tenga que rellenar ningún formulario, lista para que escriban el URL y la activen.
+
+---
+
+## 💬 7. Notificaciones Automáticas a Google Chat
+
+Para recibir una alerta instantánea en el canal de Google Chat de tu equipo cada vez que el chatbot no pueda responder una consulta (y así corregirlo rápidamente):
+
+1. Ve a **Google Chat** y abre el Espacio (Space) de tu equipo de Administración Comercial.
+2. Haz clic en el nombre del Espacio arriba y selecciona **Apps e integraciones** (Apps & Integrations).
+3. Selecciona **Webhooks** y haz clic en **Agregar Webhook** (Add Webhook).
+4. Escribe un nombre para el Bot (ej. *Asistente Operaciones*) y copia la URL generada.
+5. Agrega esta variable a tus secretos de Streamlit Cloud (o en tu archivo `.streamlit/secrets.toml` local):
+   ```toml
+   GOOGLE_CHAT_WEBHOOK_URL = "URL_DE_TU_WEBHOOK_DE_GOOGLE_CHAT"
+   ```
+
+Una vez configurado, cada consulta no resuelta enviará una alerta automática formateada al canal de Chat indicando:
+*   La sucursal del usuario.
+*   El texto de la consulta que falló.
+*   Una alerta llamando a la acción para agregar el link en la planilla.
+
+
