@@ -282,23 +282,58 @@ for message in st.session_state.messages:
 # 9. SUGERENCIAS DE INICIO RÁPIDO
 if len(st.session_state.messages) == 0:
     st.markdown('<p style="text-align: center; color: #71717a; font-size: 0.85rem; margin-bottom: 0.5rem; font-weight: 500;">Preguntas sugeridas:</p>', unsafe_allow_html=True)
-    cols = st.columns(4)
-    suggestions = [
-        ("📦 Mochilas Comerciales", "Necesito el link para Solicitud de Mochilas Comerciales"),
-        ("📝 Carga de Acuerdos", "Pasame el enlace para Carga de Acuerdos"),
-        ("🚛 Alta de Camión", "Quiero registrar un Alta de Camión"),
-        ("💻 Acceso a SAP", "Manuales y accesos de SAP")
-    ]
-    for i, (label, prompt) in enumerate(suggestions):
-        with cols[i % 4]:
-            if st.button(label, key=f"sug_{i}", use_container_width=True):
-                # Guardar el mensaje del usuario y gatillar re-run
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                # Auto-detectar sucursal si el prompt de sugerencia es procesado
-                detected = detect_branch_in_text(prompt, unique_branches)
-                if detected:
-                    st.session_state.user_branch = detected
-                st.rerun()
+    
+    # Obtener trámites únicos disponibles en el Excel para evitar sugerir cosas viejas
+    df_unique = df_links.drop_duplicates(subset=["Tramite"]).copy()
+    
+    # Lógica de priorización: si agregas una columna llamada "Destacado" (valores: SI / 1) en tu Excel, 
+    # el chatbot priorizará esos enlaces para las sugerencias. Si no está, toma 4 trámites del archivo.
+    if "Destacado" in df_unique.columns:
+        # Filtrar los destacados
+        df_destacados = df_unique[df_unique["Destacado"].astype(str).str.upper().isin(["SI", "1", "TRUE"])]
+        if len(df_destacados) >= 4:
+            suggested_df = df_destacados.head(4)
+        else:
+            # Si hay menos de 4 destacados, completamos con el resto
+            needed = 4 - len(df_destacados)
+            df_others = df_unique[~df_unique["Tramite"].isin(df_destacados["Tramite"])]
+            suggested_df = pd.concat([df_destacados, df_others.head(needed)])
+    else:
+        # Si no existe la columna de control, tomamos los primeros 4 trámites válidos
+        suggested_df = df_unique.head(4)
+        
+    num_suggestions = len(suggested_df)
+    if num_suggestions > 0:
+        cols = st.columns(num_suggestions)
+        for idx, (_, row) in enumerate(suggested_df.iterrows()):
+            tramite_name = row["Tramite"]
+            tool_name = str(row["Herramienta"]).lower()
+            
+            # Emoji dinámico por heurística
+            emoji = "🔗"
+            if "form" in tool_name:
+                emoji = "📝"
+            elif "monday" in tool_name:
+                emoji = "📦"
+            elif "sap" in tool_name:
+                emoji = "💻"
+            elif "manual" in tool_name or "capacitacion" in tool_name:
+                emoji = "📚"
+                
+            label = f"{emoji} {tramite_name}"
+            # Acortar etiquetas largas para que entren bien en móviles en los botones
+            short_label = label[:25] + "..." if len(label) > 28 else label
+            
+            # El prompt sugerido busca ese trámite exacto
+            prompt_text = f"Necesito el link para {tramite_name}"
+            
+            with cols[idx]:
+                if st.button(short_label, key=f"sug_{idx}", use_container_width=True, help=tramite_name):
+                    st.session_state.messages.append({"role": "user", "content": prompt_text})
+                    # Si el trámite seleccionado tiene una sucursal específica asociada en el Excel, la pre-seteamos
+                    if row["Sucursal"] != "Todas":
+                        st.session_state.user_branch = row["Sucursal"]
+                    st.rerun()
 
 # 10. ENTRADA DE CHAT
 user_prompt = st.chat_input("Escribí tu mensaje acá... (ej. Carga de acuerdos Rosario)")

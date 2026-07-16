@@ -21,6 +21,7 @@ Para administrar la base de datos de enlaces dinámicamente y permitir que los a
     *   `Herramienta` (ej. `Monday`, `Google Forms`, `SAP`)
     *   `Tramite` (ej. `Carga de Acuerdos`, `Solicitud de Mochilas Comerciales`)
     *   `URL` (ej. `https://monday.com/boards/...` o `https://docs.google.com/forms/...`)
+    *   `Destacado` (Opcional. Valores: `SI` o vacío. Permite forzar a que este trámite aparezca en las píldoras de "Preguntas sugeridas" en el inicio del chat).
 2.  Agrega las filas de datos correspondientes a tus sucursales y trámites.
 3.  Ve al menú **Archivo** (File) > **Compartir** (Share) > **Publicar en la Web** (Publish to the Web).
 4.  En la ventana flotante:
