@@ -85,7 +85,7 @@ def get_secret(key, default=None):
         return os.environ.get(key, default)
 
 # Función para enviar sugerencias a Google Forms (o CSV local de respaldo)
-def send_suggestion_to_google_form(sucursal, tramite):
+def send_suggestion_to_google_form(nombre, sucursal, tramite):
     form_url = get_secret("GOOGLE_FORM_URL", None)
     
     if not form_url:
@@ -94,8 +94,8 @@ def send_suggestion_to_google_form(sucursal, tramite):
             file_exists = os.path.exists("sugerencias.csv")
             with open("sugerencias.csv", "a", encoding="utf-8") as f:
                 if not file_exists:
-                    f.write("Sucursal,Tramite\n")
-                f.write(f'"{sucursal or "Todas"}","{tramite}"\n')
+                    f.write("Nombre,Sucursal,Tramite\n")
+                f.write(f'"{nombre or "Anónimo"}","{sucursal or "Todas"}","{tramite}"\n')
             return True, "local"
         except Exception as e:
             return False, f"Error al guardar localmente: {e}"
@@ -106,10 +106,12 @@ def send_suggestion_to_google_form(sucursal, tramite):
         
     try:
         # Google Forms espera enviar datos mediante POST al formResponse
+        entry_nombre = get_secret("GOOGLE_FORM_ENTRY_NOMBRE", "entry.1000003") # Opcional: entry para el nombre
         entry_sucursal = get_secret("GOOGLE_FORM_ENTRY_SUCURSAL", "entry.1000001")
         entry_tramite = get_secret("GOOGLE_FORM_ENTRY_TRAMITE", "entry.1000002")
         
         data = {
+            entry_nombre: nombre or "Anónimo",
             entry_sucursal: sucursal or "Todas",
             entry_tramite: tramite
         }
@@ -122,8 +124,8 @@ def send_suggestion_to_google_form(sucursal, tramite):
             file_exists = os.path.exists("sugerencias.csv")
             with open("sugerencias.csv", "a", encoding="utf-8") as f:
                 if not file_exists:
-                    f.write("Sucursal,Tramite\n")
-                f.write(f'"{sucursal or "Todas"}","{tramite}"\n')
+                    f.write("Nombre,Sucursal,Tramite\n")
+                f.write(f'"{nombre or "Anónimo"}","{sucursal or "Todas"}","{tramite}"\n')
             return False, "GOOGLE_WORKSPACE_RESTRICTION"
             
         if response.status_code == 200:
@@ -134,13 +136,14 @@ def send_suggestion_to_google_form(sucursal, tramite):
 
 
 # Función para enviar notificaciones a Google Chat vía Webhook
-def send_to_google_chat(sucursal, query):
+def send_to_google_chat(nombre, sucursal, query):
     webhook_url = get_secret("GOOGLE_CHAT_WEBHOOK_URL", None)
     if not webhook_url:
         return False
     try:
         payload = {
             "text": f"🚨 *Asistente Operativo - Consulta No Resuelta*\n"
+                    f"• *Operador:* {nombre or 'Anónimo'}\n"
                     f"• *Sucursal:* {sucursal or 'Desconocida'}\n"
                     f"• *Consulta del usuario:* \"{query}\"\n"
                     f"• *Acción:* La consulta no se pudo resolver y se derivó. Por favor, agregá el link correspondiente en la planilla de Google Sheets."
@@ -164,6 +167,15 @@ if "messages" not in st.session_state:
 if "user_branch" not in st.session_state:
     st.session_state.user_branch = None
 
+if "user_name" not in st.session_state:
+    st.session_state.user_name = None
+
+if "derivation_pending" not in st.session_state:
+    st.session_state.derivation_pending = False
+
+if "pending_query" not in st.session_state:
+    st.session_state.pending_query = ""
+
 if "api_key" not in st.session_state:
     # Intenta obtener la API key de los secretos de Streamlit
     st.session_state.api_key = get_secret("GEMINI_API_KEY", "")
@@ -181,16 +193,33 @@ st.markdown("""
 if is_demo_mode:
     st.toast("Modo Demo: Cargado con base de datos interna de respaldo.", icon="💡")
 
-# Widget de Sucursal Actual
-if st.session_state.user_branch:
+# Obtener lista única de sucursales
+unique_branches = df_links["Sucursal"].unique()
+# Excluir 'Todas' para que el usuario elija su sucursal específica si se necesita derivación
+clean_branches_list = [b for b in unique_branches if b.lower() != 'todas']
+clean_branches_list = sorted(clean_branches_list)
+
+# Widget de Sucursal/Operador Actual (Sólo si ya están guardados por una derivación anterior)
+if st.session_state.user_branch or st.session_state.user_name:
     col_badge, col_reset = st.columns([4, 1])
     with col_badge:
-        st.markdown(f"📍 Sucursal activa: **{st.session_state.user_branch}**", unsafe_allow_html=True)
+        info_str = "📍 Sucursal: "
+        if st.session_state.user_branch:
+            info_str += f"**{st.session_state.user_branch}**"
+        else:
+            info_str += "*No definida*"
+            
+        if st.session_state.user_name:
+            info_str += f" | 👤 Operador: **{st.session_state.user_name}**"
+        st.markdown(info_str, unsafe_allow_html=True)
     with col_reset:
-        if st.button("Cambiar ↩", key="reset_branch_btn", help="Hacé clic para cambiar la sucursal"):
+        if st.button("Restablecer ↩", key="reset_branch_btn", help="Hacé clic para limpiar tu nombre o sucursal"):
             st.session_state.user_branch = None
+            st.session_state.user_name = None
+            st.session_state.messages = []
             st.rerun()
     st.markdown("<hr style='margin: 0.5rem 0 1.5rem 0; border: 0; border-top: 1px solid #eaeaea;'>", unsafe_allow_html=True)
+
 
 # 6. CONFIGURACIÓN DE LA API KEY DE GEMINI (Si no está configurada)
 if not st.session_state.api_key:
@@ -210,6 +239,7 @@ if not st.session_state.api_key:
 
 # Inicializar cliente de Gemini con el nuevo SDK
 gemini_client = genai.Client(api_key=st.session_state.api_key)
+
 
 
 # 7. LOGICA DE DETECCION DE SUCURSAL EN TEXTO
@@ -370,10 +400,10 @@ if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] 
 
 
                 # Si la respuesta final contiene el token de derivación [DERIVAR],
-                # ejecutamos la lógica de registro y notificaciones en segundo plano.
+                # activamos la bandera de derivación pendiente y guardamos la consulta.
                 if "[DERIVAR]" in full_response:
-                    send_suggestion_to_google_form(branch_status, last_query)
-                    send_to_google_chat(branch_status, last_query)
+                    st.session_state.derivation_pending = True
+                    st.session_state.pending_query = last_query
                     full_response = full_response.replace("[DERIVAR]", "").strip()
 
                 # Guardar respuesta definitiva en el historial de sesión
@@ -382,5 +412,54 @@ if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] 
 
             except Exception as e:
                 st.error(f"Ocurrió un error al consultar con el asistente: {e}")
+
+# 12. PANTALLA CONDICIONAL DE DERIVACIÓN (Solo si una consulta no se encontró)
+if st.session_state.get("derivation_pending", False):
+    st.markdown("""
+    <div style="background-color: #fffbeb; border: 1px solid #fef08a; padding: 18px; border-radius: 12px; margin-top: 15px; margin-bottom: 15px; box-shadow: 0 4px 12px rgba(251, 191, 36, 0.05);">
+        <span style="color: #a16207; font-weight: 600; font-size: 0.95rem; display: block; margin-bottom: 4px;">✍️ Registro de Derivación Automática</span>
+        <span style="color: #71717a; font-size: 0.85rem; line-height: 1.4; display: block;">
+            No encontramos el link solicitado en el catálogo actual. Completá tus datos abajo para que el equipo de <strong>Administración Comercial</strong> te consiga el link y te notifique apenas esté disponible.
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    with st.form("derivation_form"):
+        col_name, col_br = st.columns(2)
+        with col_name:
+            reg_name = st.text_input("Tu Nombre y Apellido:", value=st.session_state.get("user_name", "") or "", placeholder="Ej: Juan Pérez")
+        with col_br:
+            # Obtener index de la sucursal actual si ya está guardada en la sesión
+            try:
+                default_idx = clean_branches_list.index(st.session_state.user_branch)
+            except ValueError:
+                default_idx = 0
+            reg_br = st.selectbox("Tu Sucursal:", clean_branches_list, index=default_idx)
+            
+        submit_deriv = st.form_submit_button("Derivar Consulta a Administración Comercial 📤")
+        
+        if submit_deriv:
+            if not reg_name.strip():
+                st.error("Por favor, escribí tu nombre para poder contactarte.")
+            else:
+                st.session_state.user_name = reg_name.strip()
+                st.session_state.user_branch = reg_br
+                
+                # Ejecutar ahora sí el envío al Google Form y Google Chat en segundo plano
+                with st.spinner("Derivando consulta..."):
+                    success, method = send_suggestion_to_google_form(st.session_state.user_name, st.session_state.user_branch, st.session_state.pending_query)
+                    send_to_google_chat(st.session_state.user_name, st.session_state.user_branch, st.session_state.pending_query)
+                
+                # Desactivar bandera
+                st.session_state.derivation_pending = False
+                st.session_state.pending_query = ""
+                
+                # Agregar confirmación visual en el historial
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": "✅ **Consulta derivada.** Registramos tus datos. El equipo de Administración Comercial ya fue notificado y se pondrá en contacto para facilitarte el acceso."
+                })
+                st.rerun()
+
 
 
