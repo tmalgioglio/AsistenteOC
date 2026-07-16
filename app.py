@@ -305,7 +305,7 @@ if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] 
             try:
                 # Inicializar modelo de Gemini con system instructions
                 model = genai.GenerativeModel(
-                    model_name="gemini-3.5-flash",
+                    model_name="gemini-1.5-flash",
                     system_instruction=system_prompt,
                     generation_config={"temperature": 0.1} # Baja temperatura para evitar alucinaciones
                 )
@@ -318,22 +318,31 @@ if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] 
                         "parts": [msg["content"]]
                     })
 
-                # Obtener respuesta de Gemini
-                response = model.generate_content(contents)
-                assistant_response = response.text
+                # Crear un contenedor vacío en la interfaz para renderizar el stream
+                placeholder = st.empty()
+                full_response = ""
 
-                # Si la respuesta contiene el token de derivación [DERIVAR],
-                # significa que el asistente no pudo responder la consulta.
-                # Guardamos la consulta como sugerencia y notificamos a Google Chat en segundo plano.
-                if "[DERIVAR]" in assistant_response:
+                # Llamar a Gemini habilitando el streaming
+                response_stream = model.generate_content(contents, stream=True)
+
+                for chunk in response_stream:
+                    full_response += chunk.text
+                    # Reemplazamos la palabra clave de derivación en la visualización en vivo
+                    clean_display = full_response.replace("[DERIVAR]", "").strip()
+                    placeholder.markdown(f'<div class="chat-bubble assistant-bubble">{clean_display}</div>', unsafe_allow_html=True)
+
+                # Si la respuesta final contiene el token de derivación [DERIVAR],
+                # ejecutamos la lógica de registro y notificaciones en segundo plano.
+                if "[DERIVAR]" in full_response:
                     send_suggestion_to_google_form(branch_status, last_query)
                     send_to_google_chat(branch_status, last_query)
-                    # Limpiar la palabra clave para que no sea visible al usuario en pantalla
-                    assistant_response = assistant_response.replace("[DERIVAR]", "").strip()
+                    # Limpiamos definitivamente el texto para guardarlo en la sesión
+                    full_response = full_response.replace("[DERIVAR]", "").strip()
 
-                # Guardar respuesta del asistente
-                st.session_state.messages.append({"role": "assistant", "content": assistant_response})
+                # Guardar respuesta definitiva en el historial de sesión
+                st.session_state.messages.append({"role": "assistant", "content": full_response})
                 st.rerun()
+
 
             except Exception as e:
                 st.error(f"Ocurrió un error al consultar con el asistente: {e}")
