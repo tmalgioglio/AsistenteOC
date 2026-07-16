@@ -333,7 +333,7 @@ if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] 
                     try:
                         full_response = ""
                         for chunk in gemini_client.models.generate_content_stream(
-                            model="gemini-3.5-flash",
+                            model="gemini-3.1-flash-lite",
                             contents=contents,
                             config=config,
                         ):
