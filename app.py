@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import os
 import unicodedata
 import requests
@@ -192,8 +193,9 @@ if not st.session_state.api_key:
         st.rerun()
     st.stop()
 
-# Configurar SDK de Gemini
-genai.configure(api_key=st.session_state.api_key)
+# Inicializar cliente de Gemini con el nuevo SDK
+gemini_client = genai.Client(api_key=st.session_state.api_key)
+
 
 # 7. LOGICA DE DETECCION DE SUCURSAL EN TEXTO
 def detect_branch_in_text(text, branches):
@@ -303,46 +305,65 @@ if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] 
             """
 
             try:
-                # Inicializar modelo de Gemini con system instructions
-                model = genai.GenerativeModel(
-                    model_name="gemini-1.5-flash",
-                    system_instruction=system_prompt,
-                    generation_config={"temperature": 0.1} # Baja temperatura para evitar alucinaciones
-                )
-
-                # Convertir historial de Streamlit al formato de la API de Gemini
+                # Construir el historial de mensajes en formato del nuevo SDK
                 contents = []
                 for msg in st.session_state.messages:
-                    contents.append({
-                        "role": "user" if msg["role"] == "user" else "model",
-                        "parts": [msg["content"]]
-                    })
+                    role = "user" if msg["role"] == "user" else "model"
+                    contents.append(
+                        types.Content(
+                            role=role,
+                            parts=[types.Part.from_text(text=msg["content"])]
+                        )
+                    )
+
+                # Configurar la generación con el system instruction y baja temperatura
+                config = types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.1,
+                )
 
                 # Crear un contenedor vacío en la interfaz para renderizar el stream
                 placeholder = st.empty()
                 full_response = ""
 
-                # Llamar a Gemini habilitando el streaming
-                response_stream = model.generate_content(contents, stream=True)
+                # Reintentos automáticos con backoff para manejar el límite de cuota (429)
+                import time
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        full_response = ""
+                        for chunk in gemini_client.models.generate_content_stream(
+                            model="gemini-3.5-flash",
+                            contents=contents,
+                            config=config,
+                        ):
+                            if chunk.text:
+                                full_response += chunk.text
+                                clean_display = full_response.replace("[DERIVAR]", "").strip()
+                                placeholder.markdown(
+                                    f'<div class="chat-bubble assistant-bubble">{clean_display}</div>',
+                                    unsafe_allow_html=True
+                                )
+                        break  # Si llegó hasta acá, salir del loop
+                    except Exception as api_err:
+                        if "429" in str(api_err) and attempt < max_retries - 1:
+                            wait_secs = (attempt + 1) * 10
+                            placeholder.info(f"⏳ Límite de consultas alcanzado. Reintentando en {wait_secs} segundos...")
+                            time.sleep(wait_secs)
+                        else:
+                            raise api_err
 
-                for chunk in response_stream:
-                    full_response += chunk.text
-                    # Reemplazamos la palabra clave de derivación en la visualización en vivo
-                    clean_display = full_response.replace("[DERIVAR]", "").strip()
-                    placeholder.markdown(f'<div class="chat-bubble assistant-bubble">{clean_display}</div>', unsafe_allow_html=True)
 
                 # Si la respuesta final contiene el token de derivación [DERIVAR],
                 # ejecutamos la lógica de registro y notificaciones en segundo plano.
                 if "[DERIVAR]" in full_response:
                     send_suggestion_to_google_form(branch_status, last_query)
                     send_to_google_chat(branch_status, last_query)
-                    # Limpiamos definitivamente el texto para guardarlo en la sesión
                     full_response = full_response.replace("[DERIVAR]", "").strip()
 
                 # Guardar respuesta definitiva en el historial de sesión
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
                 st.rerun()
-
 
             except Exception as e:
                 st.error(f"Ocurrió un error al consultar con el asistente: {e}")
