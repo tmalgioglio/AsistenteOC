@@ -1,0 +1,16 @@
+name: Mantener App Despierta
+
+on:
+  schedule:
+    # Se ejecuta cada 10 minutos las 24 horas del día
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hacer PING a Streamlit Cloud
+        run: |
+          curl -s https://asistenteoc.streamlit.app > /dev/null
+          echo "Ping realizado con éxito a las $(date)"
