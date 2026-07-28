@@ -66,19 +66,28 @@ header {
     border: 1px solid #fef08a;
 }
 
-/* Chat Input Styling */
+/* Chat Input Styling (Prominente y Grande) */
 div[data-testid="stChatInput"] {
-    border-radius: 12px !important;
-    border: 1px solid #e4e4e7 !important;
-    box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05) !important;
+    border-radius: 16px !important;
+    border: 2px solid #ca8a04 !important; /* Borde dorado/amarillo corporativo de alta visibilidad */
+    box-shadow: 0 8px 30px rgba(202, 138, 4, 0.18) !important;
     background-color: #ffffff !important;
     transition: all 0.2s ease !important;
+    padding: 6px !important;
     bottom: 20px !important;
 }
 
+div[data-testid="stChatInput"] textarea {
+    font-size: 1.1rem !important;
+    font-weight: 500 !important;
+    line-height: 1.5 !important;
+    padding: 10px 14px !important;
+    color: #09090b !important;
+}
+
 div[data-testid="stChatInput"]:focus-within {
-    border-color: #ca8a04 !important; /* Amarillo oscuro corporativo */
-    box-shadow: 0 4px 20px -2px rgba(202, 138, 4, 0.15) !important;
+    border-color: #854d0e !important;
+    box-shadow: 0 10px 35px rgba(133, 77, 14, 0.25) !important;
 }
 
 /* Restructuración de burbujas nativas de Streamlit */
